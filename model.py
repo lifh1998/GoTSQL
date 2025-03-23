@@ -307,7 +307,7 @@ class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
         # 替换原有模型为Qwen2GoTModel
         self.model = Qwen2GoTModel(config)
         # 确保权重正确初始化
-        self.post_init()
+        # self.post_init()
 
     def forward(
             self,

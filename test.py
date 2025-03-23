@@ -5,7 +5,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from model import QwenGoTEnhancedEmbeddings
 
 
-def main():
+def test_injudage_embeddings():
     # 测试配置参数
     MODEL_NAME = "Qwen/Qwen2.5-Coder-7B-Instruct"
     BATCH_SIZE = 2
@@ -117,5 +117,70 @@ def main():
         print(f"图结构输入测试失败: {e}")
 
 
+import torch
+from transformers import AutoTokenizer, AutoConfig
+from model import Qwen2GoTForCausalLM
+
+
+def test_qwen2got_model():
+    # 加载配置和分词器
+    model_name = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    config = AutoConfig.from_pretrained(model_name)
+
+    # 初始化模型
+    model = Qwen2GoTForCausalLM(config)
+
+    # 如果有预训练的权重，可以加载(可选)
+    # model.load_state_dict(torch.load("path_to_pretrained_weights.pt"))
+
+    # 模拟输入文本
+    text = "实现一个简单的图算法"
+    inputs = tokenizer(text, return_tensors="pt")
+
+    print("===== 测试1: 不使用图信息 =====")
+    # 没有图信息的前向传播
+    outputs_without_graph = model(
+        input_ids=inputs.input_ids,
+        attention_mask=inputs.attention_mask
+    )
+
+    # 打印结果
+    print(f"输出类型: {type(outputs_without_graph)}")
+    print(f"词表大小: {outputs_without_graph.logits.shape[-1]}")
+    print(f"输出形状: {outputs_without_graph.logits.shape}")
+
+    # 生成一些伪随机的图信息
+    batch_size = inputs.input_ids.shape[0]
+    num_nodes = 10  # 假设有10个节点
+    hidden_dim = config.hidden_size
+
+    # 创建随机节点特征
+    got_nodes = torch.randn(batch_size, num_nodes, hidden_dim)
+
+    # 创建随机邻接矩阵 (值为0或1)
+    adj_matrix = torch.randint(0, 2, (batch_size, num_nodes, num_nodes))
+    # 确保对角线为1 (自连接)
+    for i in range(batch_size):
+        adj_matrix[i].fill_diagonal_(1)
+
+    print("\n===== 测试2: 使用图信息 =====")
+    # 使用图信息的前向传播
+    outputs_with_graph = model(
+        input_ids=inputs.input_ids,
+        attention_mask=inputs.attention_mask,
+        got_nodes=got_nodes,
+        adj_matrix=adj_matrix
+    )
+
+    # 打印结果
+    print(f"输出类型: {type(outputs_with_graph)}")
+    print(f"词表大小: {outputs_with_graph.logits.shape[-1]}")
+    print(f"输出形状: {outputs_with_graph.logits.shape}")
+
+    print("\n===== 测试完成! =====")
+
+
 if __name__ == "__main__":
-    main()
+    test_qwen2got_model()
+
