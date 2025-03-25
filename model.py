@@ -78,7 +78,7 @@ class Qwen2GoTModel(Qwen2Model):
     def __init__(self, config):
         super(Qwen2GoTModel, self).__init__(config)
         self.gat = GAT(nfeat=config.hidden_size, nhid=config.hidden_size)
-        self.corss_attn = nn.MultiheadAttention(embed_dim=config.hidden_size, kdim=config.hidden_size,
+        self.cross_attn = nn.MultiheadAttention(embed_dim=config.hidden_size, kdim=config.hidden_size,
                                                 vdim=config.hidden_size, num_heads=1, batch_first=True)
         self.gate = nn.Linear(2 * config.hidden_size, config.hidden_size)
         # Set weights to small values, and set bias to a large negative value to ensure sigmoid outputs ~0 initially
@@ -106,7 +106,7 @@ class Qwen2GoTModel(Qwen2Model):
             # 获取图嵌入
             graph_embeds = self.get_graph_embeds(adj_matrix, got_nodes) # [batch, num_nodes, dim]
             # 交叉注意力
-            got_att, _ = self.corss_attn(
+            got_att, _ = self.cross_attn(
                 word_embeds,
                 graph_embeds,
                 graph_embeds,

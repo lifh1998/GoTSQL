@@ -51,6 +51,30 @@ def get_state_dict_from_safetensors():
     return state_dict
 
 
+def check_frozen_parameters(model):
+    # 用于存储冻结和未冻结参数的信息
+    frozen_params = []
+    trainable_params = []
+
+    # 遍历模型的所有参数
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            trainable_params.append((name, param.shape))
+        else:
+            frozen_params.append((name, param.shape))
+
+    # 打印冻结的参数
+    print("冻结的参数（requires_grad=False）：")
+    for name, shape in frozen_params:
+        print(f"参数名: {name}, 形状: {shape}")
+    # print(f"冻结参数总数: {len(frozen_params)}\n")
+
+    # 打印未冻结（可训练）的参数
+    # print("未冻结的参数（requires_grad=True）：")
+    # for name, shape in trainable_params:
+    #     print(f"参数名: {name}, 形状: {shape}")
+    # print(f"未冻结参数总数: {len(trainable_params)}")
+
 # 执行测试
 if __name__ == "__main__":
     model = test_load_model_by_config()
@@ -62,6 +86,7 @@ if __name__ == "__main__":
             "k_proj",  # Key projection
             "v_proj",  # Value projection
             "o_proj",  # Output projection (optional, if you want to include it)
+            "gate_proj",  # Fully connected layer (gate projection in MLP)
             "up_proj",  # Fully connected layer (up projection in MLP)
             "down_proj"  # Fully connected layer (down projection in MLP)
         ],
@@ -71,4 +96,5 @@ if __name__ == "__main__":
     )
     model = get_peft_model(model, lora_config)
     print(model)
+    check_frozen_parameters(model)
     model.print_trainable_parameters()
