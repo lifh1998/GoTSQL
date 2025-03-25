@@ -76,6 +76,7 @@ class GAT(nn.Module):
 
 class Qwen2GoTModel(Qwen2Model):
     def __init__(self, config):
+        super(Qwen2GoTModel, self).__init__(config)
         self.gat = GAT(nfeat=config.hidden_size, nhid=config.hidden_size)
         self.corss_attn = nn.MultiheadAttention(embed_dim=config.hidden_size, kdim=config.hidden_size,
                                                 vdim=config.hidden_size, num_heads=1, batch_first=True)
@@ -83,7 +84,6 @@ class Qwen2GoTModel(Qwen2Model):
         # Set weights to small values, and set bias to a large negative value to ensure sigmoid outputs ~0 initially
         nn.init.normal_(self.gate.weight, mean=0.0, std=0.01)
         nn.init.constant_(self.gate.bias, -10.0)
-        super(Qwen2GoTModel, self).__init__(config)
 
     def forward(
             self,
