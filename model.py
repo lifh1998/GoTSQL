@@ -76,15 +76,14 @@ class GAT(nn.Module):
 
 class Qwen2GoTModel(Qwen2Model):
     def __init__(self, config):
-        super(Qwen2GoTModel, self).__init__(config)
         self.gat = GAT(nfeat=config.hidden_size, nhid=config.hidden_size)
         self.corss_attn = nn.MultiheadAttention(embed_dim=config.hidden_size, kdim=config.hidden_size,
                                                 vdim=config.hidden_size, num_heads=1, batch_first=True)
         self.gate = nn.Linear(2 * config.hidden_size, config.hidden_size)
-        # Set weights to small values
+        # Set weights to small values, and set bias to a large negative value to ensure sigmoid outputs ~0 initially
         nn.init.normal_(self.gate.weight, mean=0.0, std=0.01)
-        # Set bias to a large negative value to ensure sigmoid outputs ~0 initially
         nn.init.constant_(self.gate.bias, -10.0)
+        super(Qwen2GoTModel, self).__init__(config)
 
     def forward(
             self,
@@ -97,21 +96,20 @@ class Qwen2GoTModel(Qwen2Model):
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
             cache_position: Optional[torch.LongTensor] = None,
-            got_nodes: Optional[torch.FloatTensor] = None,
+            got_nodes: Optional[torch.LongTensor] = None,
             adj_matrix: Optional[torch.IntTensor] = None,
             **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ):
-        # 获取原始嵌入
-        word_embeds = self.embed_tokens(input_ids)  # [batch, seq, dim]
-
         if got_nodes is not None and adj_matrix is not None:
-            # 通过图注意力网络处理节点嵌入
-            node_embeds = self.gat(got_nodes, adj_matrix)  # [batch, node_num, dim]
+            # 获取原始词嵌入
+            word_embeds = self.embed_tokens(input_ids)  # [batch, seq, dim]
+            # 获取图嵌入
+            graph_embeds = self.get_graph_embeds(adj_matrix, got_nodes) # [batch, num_nodes, dim]
             # 交叉注意力
             got_att, _ = self.corss_attn(
                 word_embeds,
-                node_embeds,
-                node_embeds,
+                graph_embeds,
+                graph_embeds,
                 key_padding_mask=(got_nodes.sum(dim=-1) == 0),
             )
             # 门控融合机制
@@ -121,7 +119,8 @@ class Qwen2GoTModel(Qwen2Model):
             # 融合嵌入
             fused_embeds = (1 - gate) * word_embeds + gate * got_att
             # 继续使用融合后的嵌入进行模型的后续计算
-            outputs = super().forward(
+            print("使用融合后的嵌入进行模型的后续计算")
+            return super().forward(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_values=past_key_values,
@@ -132,21 +131,34 @@ class Qwen2GoTModel(Qwen2Model):
                 cache_position=cache_position,
                 **flash_attn_kwargs,
             )
-        else:
-            # 如果没有图数据，则使用标准的输入
-            outputs = super().forward(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                cache_position=cache_position,
-                **flash_attn_kwargs,
-            )
+        # 如果没有图数据，则使用标准的输入
+        print("使用标准的输入")
+        return super().forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            cache_position=cache_position,
+            **flash_attn_kwargs,
+        )
 
-        return outputs
+    def get_graph_embeds(self, adj_matrix, got_nodes):
+        # 处理节点token ID并计算嵌入
+        # 假设每个节点是一个token ID序列
+        batch_size, num_nodes, seq_len = got_nodes.size()
+        # 重塑张量以便一次性处理所有节点
+        flat_nodes = got_nodes.view(-1, seq_len)  # [batch*num_nodes, seq_len]
+        # 对所有节点token进行嵌入
+        flat_node_embeds = self.embed_tokens(flat_nodes)  # [batch*num_nodes, seq_len, dim]
+        # 对每个节点的token嵌入进行平均池化，得到节点向量
+        node_embeds = flat_node_embeds.mean(dim=1)  # [batch*num_nodes, dim]
+        # 重塑回原始批次和节点维度
+        node_embeds = node_embeds.view(batch_size, num_nodes, -1)  # [batch, num_nodes, dim]
+        # 通过图注意力网络处理节点嵌入
+        return self.gat(node_embeds, adj_matrix)  # [batch, num_nodes, dim]
 
 
 class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
@@ -171,7 +183,7 @@ class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
             return_dict: Optional[bool] = None,
             cache_position: Optional[torch.LongTensor] = None,
             logits_to_keep: Union[int, torch.Tensor] = 0,
-            got_nodes: Optional[torch.FloatTensor] = None,
+            got_nodes: Optional[torch.LongTensor] = None,
             adj_matrix: Optional[torch.IntTensor] = None,
             **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
