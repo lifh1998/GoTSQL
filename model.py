@@ -21,11 +21,13 @@ class GraphAttentionLayer(nn.Module):
         self.concat = concat
 
         self.W = nn.Parameter(torch.empty(size=(in_features, out_features)))
-        nn.init.xavier_uniform_(self.W.data, gain=1.414)
         self.a = nn.Parameter(torch.empty(size=(2 * out_features, 1)))
-        nn.init.kaiming_uniform_(self.a.data, a=self.alpha, mode='fan_in', nonlinearity='leaky_relu')
         self.leakyrelu = nn.LeakyReLU(self.alpha)
         self.layer_norm = torch.nn.LayerNorm(out_features, 1e-5, elementwise_affine=True)
+
+    def post_init(self):
+        nn.init.xavier_uniform_(self.W.data, gain=1.414)
+        nn.init.kaiming_uniform_(self.a.data, a=self.alpha, mode='fan_in', nonlinearity='leaky_relu')
 
     def forward(self, h, adj):
         Wh = torch.matmul(h, self.W)  # b,N, N_out_features
@@ -62,6 +64,13 @@ class GAT(nn.Module):
         self.fc = nn.Linear(nhid, nhid)
         self.layer_norm = torch.nn.LayerNorm(nhid, 1e-5, elementwise_affine=True)
 
+    def post_init(self):
+        for attention in self.init_weights:
+            attention.post_init()
+        self.out_att.post_init()
+
+
+
     def forward(self, x, adj):
         res = x
         x = F.dropout(x, self.dropout, training=self.training)
@@ -74,9 +83,9 @@ class GAT(nn.Module):
         return x
 
 
-class Qwen2GoTModel(Qwen2Model):
+class EmbedFused(nn.Module):
     def __init__(self, config):
-        super(Qwen2GoTModel, self).__init__(config)
+        super(EmbedFused, self).__init__()
         self.gat = GAT(nfeat=config.hidden_size, nhid=config.hidden_size)
         self.cross_attn = nn.MultiheadAttention(embed_dim=config.hidden_size, kdim=config.hidden_size,
                                                 vdim=config.hidden_size, num_heads=1, batch_first=True)
@@ -84,6 +93,41 @@ class Qwen2GoTModel(Qwen2Model):
         # Set weights to small values, and set bias to a large negative value to ensure sigmoid outputs ~0 initially
         nn.init.normal_(self.gate.weight, mean=0.0, std=0.01)
         nn.init.constant_(self.gate.bias, -10.0)
+
+    def post_init(self):
+        self.gat.post_init()
+
+    def forward(
+            self,
+            word_embeds: torch.FloatTensor = None,
+            got_nodes: torch.LongTensor = None,
+            adj_matrix: torch.IntTensor = None,
+    ):
+        # 获取图嵌入
+        graph_embeds = self.get_graph_embeds(adj_matrix, got_nodes)  # [batch, num_nodes, dim]
+        # 交叉注意力
+        got_att, _ = self.cross_attn(
+            word_embeds,
+            graph_embeds,
+            graph_embeds,
+            key_padding_mask=(got_nodes.sum(dim=-1) == 0),
+        )
+        # 门控融合机制
+        gate = torch.sigmoid(self.gate(
+            torch.cat([word_embeds, got_att], dim=-1)
+        ))
+        # 融合嵌入
+        return (1 - gate) * word_embeds + gate * got_att
+
+
+
+class Qwen2GoTModel(Qwen2Model):
+    def __init__(self, config):
+        super(Qwen2GoTModel, self).__init__(config)
+        self.embed_fused = EmbedFused(config)
+
+    def init_extracted_modules(self):
+        self.embed_fused.post_init()
 
     def forward(
             self,
@@ -103,21 +147,8 @@ class Qwen2GoTModel(Qwen2Model):
         if got_nodes is not None and adj_matrix is not None:
             # 获取原始词嵌入
             word_embeds = self.embed_tokens(input_ids)  # [batch, seq, dim]
-            # 获取图嵌入
-            graph_embeds = self.get_graph_embeds(adj_matrix, got_nodes) # [batch, num_nodes, dim]
-            # 交叉注意力
-            got_att, _ = self.cross_attn(
-                word_embeds,
-                graph_embeds,
-                graph_embeds,
-                key_padding_mask=(got_nodes.sum(dim=-1) == 0),
-            )
-            # 门控融合机制
-            gate = torch.sigmoid(self.gate(
-                torch.cat([word_embeds, got_att], dim=-1)
-            ))
             # 融合嵌入
-            fused_embeds = (1 - gate) * word_embeds + gate * got_att
+            fused_embeds = self.embed_fused(word_embeds=word_embeds, got_nodes=got_nodes, adj_matrix=adj_matrix)
             # 继续使用融合后的嵌入进行模型的后续计算
             print("使用融合后的嵌入进行模型的后续计算")
             return super().forward(

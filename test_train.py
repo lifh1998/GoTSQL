@@ -1,16 +1,34 @@
+import os
+
 import torch
+from accelerate import Accelerator
 from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
 from peft import LoraConfig, get_peft_model
-from test_load_model import test_load_model_by_config
+from transformers import AutoTokenizer, Trainer, TrainingArguments, BitsAndBytesConfig
+
+from model import Qwen2GoTForCausalLM
+
 
 def test_train():
+    accelerator = Accelerator()
+
     # 0. Load model and tokenizer
     model_name = "Qwen/Qwen2.5-Coder-7B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = test_load_model_by_config(model_name)
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16
+    )
+    model = Qwen2GoTForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto",
+        torch_dtype=torch.float16
+        # quantization_config=quantization_config,
+        # low_cpu_mem_usage=True,
+    )
+    model.post_init()
 
-    # 1. Define LoRA Configuration
+    # 1. Apply LoRA to the model
     lora_config = LoraConfig(
         r=16,  # Rank of the low-rank matrices
         lora_alpha=32,  # Scaling factor
@@ -19,19 +37,28 @@ def test_train():
             "k_proj",  # Key projection
             "v_proj",  # Value projection
             "o_proj",  # Output projection (optional, if you want to include it)
+            "gate_proj",  # Fully connected layer (gate projection in MLP)
             "up_proj",  # Fully connected layer (up projection in MLP)
-            "down_proj"  # Fully connected layer (down projection in MLP)
+            "down_proj",  # Fully connected layer (down projection in MLP)
+            "lm_head",  # Output layer
         ],
         lora_dropout=0.05,  # Dropout for LoRA layers
         bias="none",  # Bias handling
         task_type="CAUSAL_LM"  # Task type for causal language modeling
     )
-
-    # 2. Apply LoRA to the model
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()  # Optional: Check which parameters are trainable
 
-    # 3. Prepare data (unchanged from your original code)
+    def activate_partial_parameters(model):
+        target_names = ['embed_fused']
+        for name, param in model.named_parameters():
+            for target_name in target_names:
+                if target_name in name:
+                    param.requires_grad = True
+
+    activate_partial_parameters(model)
+
+    # 2. Prepare data (unchanged from your original code)
     texts = [
         '你好,很高兴认识你！',
         '请写一个学生课程成绩查询的SQL语句。'
@@ -90,9 +117,12 @@ def test_train():
             }
 
             if self.has_graph_data:
-                node_ids = [self.tokenizer(node, return_tensors="pt", padding=False)["input_ids"].squeeze(0) for node in self.node_names[idx]]
+                node_ids = [self.tokenizer(node, return_tensors="pt", padding=False)["input_ids"].squeeze(0) for node in
+                            self.node_names[idx]]
                 max_node_len = max(ids.size(0) for ids in node_ids)
-                padded_node_ids = [torch.cat([ids, torch.zeros(max_node_len - ids.size(0), dtype=torch.long)]) if ids.size(0) < max_node_len else ids for ids in node_ids]
+                padded_node_ids = [
+                    torch.cat([ids, torch.zeros(max_node_len - ids.size(0), dtype=torch.long)]) if ids.size(
+                        0) < max_node_len else ids for ids in node_ids]
                 got_nodes = torch.stack(padded_node_ids)
                 adj_matrix = torch.tensor(self.adj_matrices[idx], dtype=torch.float)
                 result["got_nodes"] = got_nodes
@@ -166,11 +196,11 @@ def test_train():
     # Create dataset
     dataset = GraphTextDataset(texts, responses, tokenizer, node_names, adj_matrices)
 
-    # 4. Define training arguments
+    # 3. Define training arguments
     training_args = TrainingArguments(
         output_dir="./outputs",
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=8,
         num_train_epochs=3,
         logging_dir="./logs",
         logging_steps=10,
@@ -179,22 +209,38 @@ def test_train():
         fp16=True,
         gradient_checkpointing=True,
         optim="adamw_torch_fused",
+        # 多GPU训练相关设置
+        local_rank=-1,  # 让Trainer自动检测分布式环境
+        ddp_find_unused_parameters=False,  # 优化DDP性能
+        ddp_bucket_cap_mb=25,
+        dataloader_num_workers=2,  # 数据加载器的工作进程数
     )
 
-    # 5. Initialize Trainer
+    # 4. Initialize Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
         data_collator=collate_fn,
     )
+    # 4.1 Use accelerator
+    trainer.model, trainer.optimizer, trainer.train_dataset, trainer.data_collator = accelerator.prepare(
+        trainer.model, trainer.optimizer, trainer.train_dataset, trainer.data_collator
+    )
 
-    # 6. Train model
+    # 5. Train model
     trainer.train()
+    accelerator.wait_for_everyone()  # Sync all processes
+    if accelerator.is_main_process:
+        model.save_pretrained("./qwen2got_lora_model")
+        tokenizer.save_pretrained("./qwen2got_lora_model")
 
-    # 7. Save the LoRA-adapted model
+    # 6. Save the LoRA-adapted model
     model.save_pretrained("./qwen2got_lora_model")
     tokenizer.save_pretrained("./qwen2got_lora_model")
 
+
 if __name__ == '__main__':
+    # 设置要使用的GPU
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # 指定使用CUDA 0和CUDA 1
     test_train()
