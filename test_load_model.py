@@ -85,7 +85,7 @@ def check_frozen_parameters(model):
 
 
 def activate_partial_parameters(model):
-    target_names = ['embed_fused']
+    target_names = ['graph_fused']
     # 遍历模型的所有参数
     for name, param in model.named_parameters():
         for target_name in target_names:
