@@ -1,4 +1,6 @@
 import os
+import re
+import warnings
 
 import torch
 import wandb
@@ -8,13 +10,15 @@ from transformers import AutoTokenizer, Trainer, TrainingArguments, BitsAndBytes
 
 from model import Qwen2GoTForCausalLM
 
-import warnings
-warnings.filterwarnings("ignore", message="Setting `save_embedding_layers` to `True` as embedding layers found in `target_modules`.")
+warnings.filterwarnings("ignore",
+                        message="Setting `save_embedding_layers` to `True` as embedding layers found in `target_modules`.")
+
 
 class WandbCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is not None:
             wandb.log(logs)
+
 
 def test_train():
     # 0. Load model and tokenizer
@@ -64,68 +68,138 @@ def test_train():
     activate_partial_parameters(model)
 
     # 2. Prepare data
-    texts = [
-        '你好,很高兴认识你！',
-        '请写一个学生课程成绩查询的SQL语句。'
-    ]
-    responses = [
-        '你好！我是Claude，有什么我可以帮助你的吗？',
-        'SELECT s.student_name, c.course_name, sc.score FROM students s JOIN student_course sc ON s.student_id = sc.student_id JOIN courses c ON sc.course_id = c.course_id WHERE s.student_id = [学生ID];'
-    ]
-    node_names = [
-        ['张三', '李四', '王五'],
-        ['张三', '李四', '王五', '赵六']
-    ]
-    adj_matrices = [
-        [[1, 0, 0], [1, 1, 0], [0, 1, 1]],
-        [[1, 0, 0, 1], [1, 1, 0, 0], [0, 1, 1, 1], [1, 0, 0, 1]]
-    ]
+    # input_seqs = [
+    #     '你好,很高兴认识你！',
+    #     '请写一个学生课程成绩查询的SQL语句。'
+    # ]
+    # output_seqs = [
+    #     '你好！我是Claude，有什么我可以帮助你的吗？',
+    #     'SELECT s.student_name, c.course_name, sc.score FROM students s JOIN student_course sc ON s.student_id = sc.student_id JOIN courses c ON sc.course_id = c.course_id WHERE s.student_id = [学生ID];'
+    # ]
+    # node_names = [
+    #     ['张三', '李四', '王五'],
+    #     ['张三', '李四', '王五', '赵六']
+    # ]
+    # adj_matrices = [
+    #     [[1, 0, 0], [1, 1, 0], [0, 1, 1]],
+    #     [[1, 0, 0, 1], [1, 1, 0, 0], [0, 1, 1, 1], [1, 0, 0, 1]]
+    # ]
+    #
+    # # 创建数据字典
+    # data_dict = {
+    #     "input_seq": input_seqs,
+    #     "output_seq": output_seqs,
+    #     "node_names": node_names,
+    #     "adj_matrices": adj_matrices
+    # }
+    # dataset = Dataset.from_dict(data_dict)
+    # dataset = Dataset.from_json("D:\\ujs\\workspace\\datasets\\OmniSQL\\data\\train_spider.json")
+    dataset = Dataset.from_json("/home/jamtc/paper-code/lifh/my-experiments/gotsql/datasets/train_spider.json")
 
-    # 创建数据字典
-    data_dict = {
-        "input_text": texts,
-        "response_text": responses,
-        "node_names": node_names,
-        "adj_matrices": adj_matrices
-    }
-    dataset = Dataset.from_dict(data_dict)
+    def set_one(matrix, i, j):
+        matrix[i, j] = 1
+        matrix[j, i] = 1
 
-    # 定义预处理函数
-    def preprocess_function(examples):
+    def augment_data(examples):
+        node_names_list = []
+        adj_matrices_list = []
+
+        for input_seq in examples['input_seq']:
+            print(input_seq)
+            node_names = ['TABLE', 'COLUMN', 'DATA_TYPE']
+
+            # 找到所有的 CREATE TABLE 语句
+            tables = re.findall(r"CREATE TABLE `?(\w+)`?\s*\((.*?)\);", input_seq, re.DOTALL)
+            table_names = [table_name.lower() for table_name, _ in tables]
+
+            foreign_key_relationships = []
+            table_column_dict = {}
+            data_type_set = set()
+            # 遍历每个表的定义
+            for table_name, table_content in tables:
+                # 找到所有的列
+                columns = re.findall(r"\n\s*`?(\w+(?:\s+\w+)?)`?\s+(\w+),\s*--\s*.*?example:", table_content)
+                column_dict = {}
+                for column_name, data_type in columns:
+                    data_type_set.add(data_type.lower())
+                    column_dict[column_name.lower()] = data_type.lower()
+                table_column_dict[table_name.lower()] = column_dict
+                # 查找外键关系
+                fks = re.findall(r"FOREIGN KEY \(`?(\w+)`?\) REFERENCES `?(\w+)`? \(`?(\w+)`?\)", table_content)
+                for fk_column, ref_table, ref_column in fks:
+                    foreign_key_relationships.append(
+                        (table_name.lower(), fk_column.lower(), ref_table.lower(), ref_column.lower()))
+
+            # Create adjacency matrix
+            num_nodes = len(node_names)
+            num_tables = len(table_names)
+            num_columns = sum(len(value) for value in table_column_dict.values())
+            num_data_types = len(data_type_set)
+            matrix_size = num_nodes + num_tables + num_columns + num_data_types
+            adj_matrix = np.zeros((matrix_size, matrix_size), dtype=int)
+            for i in range(matrix_size):
+                adj_matrix[i, i] = 1
+
+            # 处理结点以及关系
+            for data_type in data_type_set:
+                node_names.append(data_type)
+                set_one(adj_matrix, 2, len(node_names) - 1)
+            for table_name in table_names:
+                node_names.append(table_name)
+                set_one(adj_matrix, 0, len(node_names) - 1)
+                for column_name, data_type in table_column_dict[table_name].items():
+                    node_names.append(column_name)
+                    curr_index = len(node_names) - 1
+                    set_one(adj_matrix, 1, curr_index)
+                    set_one(adj_matrix, node_names.index(table_name), curr_index)
+                    set_one(adj_matrix, node_names.index(data_type), curr_index)
+                    # 替换数据，方便找外键关系
+                    table_column_dict[table_name][column_name] = curr_index
+            node_names_list.append(node_names)
+
+            # 处理外键关系
+            for relationship in foreign_key_relationships:
+                source_table = relationship[0]
+                source_fk = relationship[1]
+                target_table = relationship[2]
+                target_fk = relationship[3]
+                print(source_table, source_fk, target_table, target_fk)
+                if source_table.lower() in node_names and target_table.lower() in node_names:
+                    source_fk_index = table_column_dict[source_table][source_fk]
+                    target_fk_index = table_column_dict[target_table][target_fk]
+                    set_one(adj_matrix, source_fk_index, target_fk_index)
+            adj_matrices_list.append(adj_matrix.tolist())
+
+        result = {
+            "input_seq": examples['input_seq'],
+            "output_seq": examples['output_seq'],
+            "node_names": node_names_list,
+            "adj_matrices": adj_matrices_list,
+        }
+        return result
+
+    dataset = dataset.map(augment_data, batched=True)
+
+    # 序列数据编码
+    def preprocess_seq_data(examples):
         # 对输入和响应进行 tokenization，启用 padding 和 truncation
         input_tokens = tokenizer(
-            examples["input_text"],
+            examples["input_seq"],
             padding=True,  # 填充到最长序列
             truncation=True,  # 截断超长序列
             return_tensors="pt"
         )
         response_tokens = tokenizer(
-            examples["response_text"],
+            examples["output_seq"],
             padding=True,
             truncation=True,
             return_tensors="pt"
         )
 
-        # 移除多余的维度（batch 维度）
-        result = {
-            "input_ids": input_tokens["input_ids"],
-            "attention_mask": input_tokens["attention_mask"],
-            "response_ids": response_tokens["input_ids"],
-            "response_mask": response_tokens["attention_mask"],
-            "node_names": examples["node_names"],
-            "adj_matrices": examples["adj_matrices"]
-        }
-        return result
-
-    # 应用预处理
-    dataset = dataset.map(preprocess_function, batched=True)
-
-    # 将数据转换为训练所需格式
-    def format_function(examples):
-        input_ids = examples["input_ids"]
-        attention_mask = examples["attention_mask"]
-        response_ids = examples["response_ids"]
-        response_mask = examples["response_mask"]
+        input_ids = input_tokens["input_ids"]
+        attention_mask = input_tokens["attention_mask"]
+        response_ids = response_tokens["input_ids"]
+        response_mask = response_tokens["attention_mask"]
 
         # 将列表转换为张量
         input_ids = torch.tensor(input_ids)
@@ -141,6 +215,21 @@ def test_train():
         full_input_ids = torch.cat([input_ids, response_ids], dim=1)
         full_attention_mask = torch.cat([attention_mask, response_mask], dim=1)
 
+        # 移除多余的维度（batch 维度）
+        result = {
+            "input_ids": full_input_ids,
+            "attention_mask": full_attention_mask,
+            "labels": labels,
+            "node_names": examples["node_names"],
+            "adj_matrices": examples["adj_matrices"]
+        }
+        return result
+
+    # 应用预处理
+    dataset = dataset.map(preprocess_seq_data, batched=True)
+
+    # 图数据编码以及最终处理
+    def preprocess_graph_data(examples):
         # 处理图数据
         node_ids = [
             [tokenizer(node, return_tensors="pt", padding=False)["input_ids"].squeeze(0) for node in nodes]
@@ -181,14 +270,14 @@ def test_train():
         adj_matrix = torch.stack(padded_adj_matrices)
 
         return {
-            "input_ids": full_input_ids,
-            "attention_mask": full_attention_mask,
-            "labels": labels,
+            "input_ids": examples["input_ids"],
+            "attention_mask": examples["attention_mask"],
+            "labels": examples["labels"],
             "got_nodes": got_nodes,
             "adj_matrix": adj_matrix
         }
 
-    dataset = dataset.map(format_function, batched=True)
+    dataset = dataset.map(preprocess_graph_data, batched=True)
 
     # 设置数据集格式为 PyTorch
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels", "got_nodes", "adj_matrix"])
