@@ -291,6 +291,7 @@ def test_train():
         logging_dir="./output/log",
         logging_strategy="epoch",
         save_strategy="epoch",
+        evaluation_strategy="epoch",
         learning_rate=5e-5,
         fp16=True,
         label_names=["labels"],
@@ -307,6 +308,7 @@ def test_train():
         model=model,
         args=training_args,
         train_dataset=dataset,
+        eval_dataset=dataset.shuffle(seed=42).select(range(100)),
         callbacks=[WandbCallback()],
     )
 
@@ -314,7 +316,7 @@ def test_train():
     trainer.train()
 
     # 6. Save model
-    # trainer.save_model()
+    trainer.save_model()
 
 
 if __name__ == '__main__':
