@@ -285,7 +285,7 @@ def test_train():
     # 3. Define training arguments
     training_args = TrainingArguments(
         output_dir="./output/model",
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         num_train_epochs=3,
         logging_dir="./output/log",
@@ -330,11 +330,11 @@ if __name__ == '__main__':
         project="qwen2got-training",  # 项目名称，可以自定义
         config={  # 记录超参数
             "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
-            "lora_r": 16,
-            "lora_alpha": 32,
+            "lora_r": 32,
+            "lora_alpha": 64,
             "learning_rate": 5e-5,
             "num_epochs": 3,
-            "batch_size": 1,
+            "batch_size": 16,
             "gradient_accumulation_steps": 4
         }
     )
