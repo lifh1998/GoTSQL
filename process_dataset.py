@@ -49,7 +49,7 @@ def generate_sample_graph_data(examples):
     return result
 
 
-def generate_graph_data(examples):
+def generate_complete_graph_data(examples):
     node_names_list = []
     adj_matrices_list = []
 

@@ -1,6 +1,6 @@
 from datasets import Dataset
 
-from process_dataset import generate_sample_graph_data, generate_graph_data
+from process_dataset import generate_sample_graph_data, generate_complete_graph_data
 
 
 def test_extract_graph_without_column(dataset):
@@ -8,7 +8,7 @@ def test_extract_graph_without_column(dataset):
 
 
 def test_extract_graph_with_column(dataset):
-    return dataset.map(generate_graph_data, batched=True)
+    return dataset.map(generate_complete_graph_data, batched=True)
 
 
 if __name__ == "__main__":

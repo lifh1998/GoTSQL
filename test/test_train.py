@@ -7,7 +7,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import AutoTokenizer, Trainer, TrainingArguments, TrainerCallback
 
 from model import Qwen2GoTForCausalLM
-from process_dataset import generate_graph_data, process_seq_data, process_graph_data, custom_data_collator
+from process_dataset import generate_complete_graph_data, process_seq_data, process_graph_data, custom_data_collator
 
 warnings.filterwarnings("ignore",
                         message="Setting `save_embedding_layers` to `True` as embedding layers found in `target_modules`.")
@@ -70,7 +70,7 @@ def test_train():
 
     dataset = Dataset.from_json("/home/jamtc/paper-code/lifh/my-experiments/gotsql/datasets/train/train_spider.json")
     # 应用预处理
-    dataset = dataset.map(generate_graph_data, batched=True)
+    dataset = dataset.map(generate_complete_graph_data, batched=True)
     dataset = dataset.map(preprocess_seq_data, batched=True)
     dataset = dataset.map(preprocess_graph_data, batched=True)
 
