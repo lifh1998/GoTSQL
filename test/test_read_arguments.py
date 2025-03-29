@@ -18,6 +18,10 @@ class ModelArguments:
     tokenizer_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
+    apply_lora: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to apply LoRA or not."},
+    )
     lora_alpha: Optional[int] = field(
         default=None,
         metadata={"help": "LoRA alpha"},

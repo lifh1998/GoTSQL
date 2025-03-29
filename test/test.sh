@@ -10,6 +10,7 @@ deepspeed --num_gpus=2 test_read_arguments.py \
     --tokenizer_name "${model_name}" \
     --do_train \
     --do_eval \
+    --apply_lora \
     --lora_r 8 \
     --lora_alpha 16 \
     --target_modules "q_proj" "k_proj" "v_proj" "o_proj" "gate_proj" "up_proj" "down_proj" "lm_head" \
