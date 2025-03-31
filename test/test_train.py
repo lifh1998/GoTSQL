@@ -21,7 +21,7 @@ class WandbCallback(TrainerCallback):
 
 def test_train():
     # 0. Load model and tokenizer
-    model_name = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    model_name = "Qwen/Qwen2.5-Coder-3B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = Qwen2GoTForCausalLM.from_pretrained(
         model_name,
@@ -95,7 +95,7 @@ def test_train():
         model=model,
         args=training_args,
         train_dataset=dataset,
-        # eval_dataset=dataset.shuffle(seed=42).select(range(200)),
+        eval_dataset=dataset.shuffle(seed=42).select(range(200)),
         data_collator=data_collator,
         callbacks=[WandbCallback()],
     )
@@ -117,13 +117,13 @@ if __name__ == '__main__':
     wandb.init(
         project="qwen2got-training",  # 项目名称，可以自定义
         config={  # 记录超参数
-            "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "model_name": "Qwen/Qwen2.5-Coder-3B-Instruct",
             "lora_r": 16,
             "lora_alpha": 32,
-            "learning_rate": 5e-5,
+            "learning_rate": 2e-5,
             "num_epochs": 3,
-            "batch_size": 2,
-            "gradient_accumulation_steps": 2
+            "batch_size": 8,
+            "gradient_accumulation_steps": 4
         }
     )
 
