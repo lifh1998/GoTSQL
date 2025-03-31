@@ -88,7 +88,7 @@ class GraphFused(nn.Module):
         super(GraphFused, self).__init__()
         self.gat = GAT(nfeat=config.hidden_size, nhid=config.hidden_size)
         self.cross_attn = nn.MultiheadAttention(embed_dim=config.hidden_size, kdim=config.hidden_size,
-                                                vdim=config.hidden_size, num_heads=1, batch_first=True)
+                                                vdim=config.hidden_size, num_heads=8, batch_first=True)
         self.gate = nn.Linear(2 * config.hidden_size, config.hidden_size)
         # Set weights to small values, and set bias to a large negative value to ensure sigmoid outputs ~0 initially
         nn.init.normal_(self.gate.weight, mean=0.0, std=0.01)
@@ -186,14 +186,23 @@ class Qwen2GoTModel(Qwen2Model):
 
     def get_node_embeds(self, got_nodes):
         # 处理节点token ID并计算嵌入
-        # 假设每个节点是一个token ID序列
         batch_size, num_nodes, seq_len = got_nodes.size()
         # 重塑张量以便一次性处理所有节点
         flat_nodes = got_nodes.view(-1, seq_len)  # [batch*num_nodes, seq_len]
         # 对所有节点token进行嵌入
         flat_node_embeds = self.embed_tokens(flat_nodes)  # [batch*num_nodes, seq_len, dim]
-        # 对每个节点的token嵌入进行平均池化，得到节点向量
-        node_embeds = flat_node_embeds.mean(dim=1)  # [batch*num_nodes, dim]
+
+        # 应用掩码进行加权平均池化
+        # 创建掩码，标记非填充(非0)位置为1，填充位置为0
+        mask = (flat_nodes != 0).float()  # [batch*num_nodes, seq_len]
+        # 先将mask扩展到与embedding维度相同
+        expanded_mask = mask.unsqueeze(-1)  # [batch*num_nodes, seq_len, 1]
+        # 对嵌入应用掩码(将填充位置的嵌入置为0)
+        masked_embeds = flat_node_embeds * expanded_mask  # [batch*num_nodes, seq_len, dim]
+        # 计算每个序列的非填充token数量(避免除零错误)
+        seq_lengths = torch.clamp(mask.sum(dim=1, keepdim=True).unsqueeze(-1), min=1.0)  # [batch*num_nodes, 1, 1]
+        # 计算非填充token的平均嵌入
+        node_embeds = masked_embeds.sum(dim=1) / seq_lengths.squeeze(-1)  # [batch*num_nodes, dim]
         # 重塑回原始批次和节点维度
         return node_embeds.view(batch_size, num_nodes, -1)  # [batch, num_nodes, dim]
 

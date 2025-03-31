@@ -88,12 +88,15 @@ def test_train():
     )
 
     # 4. Initialize Trainer
+    def data_collator(features):
+        return custom_data_collator(features, tokenizer.pad_token_id)
+
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
         # eval_dataset=dataset.shuffle(seed=42).select(range(200)),
-        data_collator=custom_data_collator,
+        data_collator=data_collator,
         callbacks=[WandbCallback()],
     )
 

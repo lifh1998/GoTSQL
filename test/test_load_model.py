@@ -19,10 +19,10 @@ def test_load_model_from_pretrained():
     )
     model = Qwen2GoTForCausalLM.from_pretrained(
         model_name,
-        device_map="auto",
-        # torch_dtype=torch.float16,
+        device_map="cpu",
+        torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
-        quantization_config=quantization_config,
+        # quantization_config=quantization_config,
         # load_in_8bit=True,
     )
     return model

@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoTokenizer
 
-from test_load_model import test_load_model_by_config
+from test_load_model import test_load_model_by_config, test_load_model_from_pretrained
 
 
 def test_forward():
@@ -71,7 +71,7 @@ def prepare_data(
 
 def test_generate():
     # 创建模型
-    model = test_load_model_by_config()
+    model = test_load_model_from_pretrained()
     # 加载分词器
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-7B-Instruct")
     # 准备数据

@@ -51,7 +51,7 @@ def generate_sample_graph_data(examples):
 
 def generate_complete_graph_data(examples):
     node_names_list = []
-    adj_matrices_list = []
+    adj_matrix_list = []
 
     def set_one(matrix, i, j):
         matrix[i, j] = 1
@@ -130,13 +130,13 @@ def generate_complete_graph_data(examples):
             else:
                 print(f"可用的表: {list(table_column_dict.keys())}")
                 raise ValueError(f"警告：找不到表 {source_table} 或 {target_table}")
-        adj_matrices_list.append(adj_matrix.tolist())
+        adj_matrix_list.append(adj_matrix.tolist())
 
     result = {
         "input_seq": examples['input_seq'],
         "output_seq": examples['output_seq'],
         "node_names": node_names_list,
-        "adj_matrices": adj_matrices_list,
+        "adj_matrix": adj_matrix_list,
     }
     return result
 
@@ -145,16 +145,12 @@ def process_seq_data(examples, tokenizer):
     # 对输入和响应进行 tokenization，启用 padding 和 truncation
     input_tokens = tokenizer(
         examples["input_seq"],
-        padding="max_length",  # 填充到最长序列
-        truncation=True,  # 截断超长序列
-        max_length=512,
+        padding=False,
         return_tensors="pt"
     )
     response_tokens = tokenizer(
         examples["output_seq"],
-        padding="max_length",
-        truncation=True,
-        max_length=512,
+        padding=False,
         return_tensors="pt"
     )
 
@@ -177,7 +173,7 @@ def process_seq_data(examples, tokenizer):
         "attention_mask": full_attention_mask,
         "labels": labels,
         "node_names": examples["node_names"],
-        "adj_matrices": examples["adj_matrices"]
+        "adj_matrix": examples["adj_matrix"]
     }
     return result
 
@@ -189,54 +185,57 @@ def process_graph_data(examples, tokenizer):
         for nodes in examples["node_names"]
     ]
 
-    # 计算最大节点 token 长度和最大节点数量
-    max_node_len = max(max(ids.size(0) for ids in node_batch) for node_batch in node_ids)
-    max_num_nodes = max(len(node_batch) for node_batch in node_ids)
-
-    # 填充节点数据
-    padded_node_ids = []
-    for node_batch in node_ids:
-        padded_nodes = [
-            torch.cat([ids, torch.zeros(max_node_len - ids.size(0), dtype=torch.long)]) if ids.size(
-                0) < max_node_len else ids
-            for ids in node_batch
-        ]
-        while len(padded_nodes) < max_num_nodes:
-            padded_nodes.append(torch.zeros(max_node_len, dtype=torch.long))
-        padded_nodes = padded_nodes[:max_num_nodes]
-        padded_node_ids.append(torch.stack(padded_nodes))
-
-    got_nodes = torch.stack(padded_node_ids)
-
-    # 填充邻接矩阵
-    adj_matrices = examples["adj_matrices"]
-    padded_adj_matrices = []
-    for adj in adj_matrices:
-        adj_tensor = torch.tensor(adj, dtype=torch.float)
-        n = adj_tensor.size(0)
-        if n < max_num_nodes:
-            padded_adj = torch.zeros((max_num_nodes, max_num_nodes), dtype=torch.float)
-            padded_adj[:n, :n] = adj_tensor
-            padded_adj_matrices.append(padded_adj)
-        else:
-            padded_adj_matrices.append(adj_tensor[:max_num_nodes, :max_num_nodes])
-    adj_matrix = torch.stack(padded_adj_matrices)
-
     return {
         "input_ids": examples["input_ids"],
         "attention_mask": examples["attention_mask"],
         "labels": examples["labels"],
-        "got_nodes": got_nodes,
-        "adj_matrix": adj_matrix
+        "got_nodes": node_ids,
+        "adj_matrix": examples["adj_matrix"],
     }
 
 
-def custom_data_collator(features):
+def custom_data_collator(features, pad_token_id):
     batch = {}
-    # 处理可以直接堆叠的特征
-    for k in ["input_ids", "attention_mask", "labels"]:
-        if k in features[0]:
-            batch[k] = torch.stack([f[k] for f in features])
+
+    # Process sequence data with padding to max length in batch
+    if "input_ids" in features[0]:
+        # Get maximum length in the batch
+        max_length = max(len(f["input_ids"]) for f in features)
+
+        # Initialize tensors for padded data
+        input_ids_padded = []
+        attention_mask_padded = []
+        labels_padded = []
+
+        for f in features:
+            # Current sequence length
+            seq_len = len(f["input_ids"])
+
+            # Pad input_ids with tokenizer.pad_token_id
+            padded_input = torch.cat([
+                f["input_ids"],
+                torch.full((max_length - seq_len,), pad_token_id, dtype=torch.long)
+            ])
+            input_ids_padded.append(padded_input)
+
+            # Pad attention_mask with zeros
+            padded_mask = torch.cat([
+                f["attention_mask"],
+                torch.zeros(max_length - seq_len, dtype=torch.long)
+            ])
+            attention_mask_padded.append(padded_mask)
+
+            # Pad labels with -100
+            padded_labels = torch.cat([
+                f["labels"],
+                torch.full((max_length - seq_len,), -100, dtype=torch.long)
+            ])
+            labels_padded.append(padded_labels)
+
+        # Stack tensors into batch
+        batch["input_ids"] = torch.stack(input_ids_padded)
+        batch["attention_mask"] = torch.stack(attention_mask_padded)
+        batch["labels"] = torch.stack(labels_padded)
 
     # 特殊处理图结构数据
     if "got_nodes" in features[0]:
