@@ -6,7 +6,7 @@ from peft import LoraConfig, get_peft_model
 from safetensors import safe_open
 from transformers import AutoConfig, BitsAndBytesConfig
 
-from model import Qwen2GoTForCausalLM
+from model import GoTSQLModelForCausalLM
 
 model_name = "Qwen/Qwen2.5-Coder-7B-Instruct"
 
@@ -17,7 +17,7 @@ def test_load_model_from_pretrained():
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.float16
     )
-    model = Qwen2GoTForCausalLM.from_pretrained(
+    model = GoTSQLModelForCausalLM.from_pretrained(
         model_name,
         device_map="cpu",
         torch_dtype=torch.float16,
@@ -31,7 +31,7 @@ def test_load_model_from_pretrained():
 def test_load_model_by_config(model_name=model_name):
     config = AutoConfig.from_pretrained(model_name)
     config.torch_dtype = torch.float16
-    model = Qwen2GoTForCausalLM(config)
+    model = GoTSQLModelForCausalLM(config)
     print(next(model.parameters()).dtype)
     # 加载预训练权重
     load_state_dict_from_safetensors(model=model, dtype=torch.float16)
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     # )
     # model = dispatch_model(model, device_map=device_map)
 
-    model = Qwen2GoTForCausalLM.from_pretrained(
+    model = GoTSQLModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True

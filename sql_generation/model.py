@@ -3,12 +3,12 @@ from typing import Optional, Union, Tuple, List
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn import CrossEntropyLoss
 from transformers import Qwen2Model, Qwen2ForCausalLM
-from transformers.cache_utils import Cache
-from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.models.qwen2.modeling_qwen2 import KwargsForCausalLM
-from transformers.processing_utils import Unpack
+from transformers.utils import is_torchdynamo_compiling, logging
+
+logger = logging.get_logger(__name__)
 
 
 class GraphAttentionLayer(nn.Module):
@@ -69,8 +69,6 @@ class GAT(nn.Module):
             attention.post_init()
         self.out_att.post_init()
 
-
-
     def forward(self, x, adj):
         res = x
         x = F.dropout(x, self.dropout, training=self.training)
@@ -123,10 +121,9 @@ class GraphFused(nn.Module):
         return (1 - gate) * word_embeds + gate * got_att
 
 
-
-class Qwen2GoTModel(Qwen2Model):
+class GoTSQLModel(Qwen2Model):
     def __init__(self, config):
-        super(Qwen2GoTModel, self).__init__(config)
+        super(GoTSQLModel, self).__init__(config)
         self.graph_fused = GraphFused(config)
 
     def init_extracted_modules(self):
@@ -137,7 +134,8 @@ class Qwen2GoTModel(Qwen2Model):
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[Cache] = None,
+            past_key_values: Optional[List[torch.FloatTensor]] = None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
@@ -145,7 +143,6 @@ class Qwen2GoTModel(Qwen2Model):
             cache_position: Optional[torch.LongTensor] = None,
             got_nodes: Optional[torch.LongTensor] = None,
             adj_matrix: Optional[torch.IntTensor] = None,
-            **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ):
         if got_nodes is not None and adj_matrix is not None:
             # 获取原始词嵌入
@@ -161,6 +158,7 @@ class Qwen2GoTModel(Qwen2Model):
             )
             # 继续使用融合后的嵌入进行模型的后续计算
             return super().forward(
+                input_ids=None,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_values=past_key_values,
@@ -169,7 +167,6 @@ class Qwen2GoTModel(Qwen2Model):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 cache_position=cache_position,
-                **flash_attn_kwargs,
             )
         # 如果没有图数据，则使用标准的输入
         return super().forward(
@@ -181,46 +178,34 @@ class Qwen2GoTModel(Qwen2Model):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
-            **flash_attn_kwargs,
         )
 
     def get_node_embeds(self, got_nodes):
-        # 处理节点token ID并计算嵌入
         batch_size, num_nodes, seq_len = got_nodes.size()
-        # 重塑张量以便一次性处理所有节点
         flat_nodes = got_nodes.view(-1, seq_len)  # [batch*num_nodes, seq_len]
-        # 对所有节点token进行嵌入
         flat_node_embeds = self.embed_tokens(flat_nodes)  # [batch*num_nodes, seq_len, dim]
 
-        # 应用掩码进行加权平均池化
-        # 创建掩码，标记非填充(非0)位置为1，填充位置为0
         mask = (flat_nodes != 0).float()  # [batch*num_nodes, seq_len]
-        # 先将mask扩展到与embedding维度相同
         expanded_mask = mask.unsqueeze(-1)  # [batch*num_nodes, seq_len, 1]
         # 对嵌入应用掩码(将填充位置的嵌入置为0)
         masked_embeds = flat_node_embeds * expanded_mask  # [batch*num_nodes, seq_len, dim]
-        # 计算每个序列的非填充token数量(避免除零错误)
         seq_lengths = torch.clamp(mask.sum(dim=1, keepdim=True).unsqueeze(-1), min=1.0)  # [batch*num_nodes, 1, 1]
-        # 计算非填充token的平均嵌入
         node_embeds = masked_embeds.sum(dim=1) / seq_lengths.squeeze(-1)  # [batch*num_nodes, dim]
-        # 重塑回原始批次和节点维度
         return node_embeds.view(batch_size, num_nodes, -1)  # [batch, num_nodes, dim]
 
 
-class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
+class GoTSQLModelForCausalLM(Qwen2ForCausalLM):
     def __init__(self, config):
-        super(Qwen2GoTForCausalLM, self).__init__(config)
-        # 替换原有模型为Qwen2GoTModel
-        self.model = Qwen2GoTModel(config)
-        # 确保权重正确初始化
-        # self.post_init()
+        super(GoTSQLModelForCausalLM, self).__init__(config)
+        # 替换原有模型为GoTSQLModel
+        self.model = GoTSQLModel(config)
 
     def forward(
             self,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+            past_key_values: Optional[List[torch.FloatTensor]] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
             labels: Optional[torch.LongTensor] = None,
             use_cache: Optional[bool] = None,
@@ -228,10 +213,9 @@ class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
             cache_position: Optional[torch.LongTensor] = None,
-            logits_to_keep: Union[int, torch.Tensor] = 0,
+            num_logits_to_keep: int = 0,
             got_nodes: Optional[torch.LongTensor] = None,
             adj_matrix: Optional[torch.IntTensor] = None,
-            **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -246,6 +230,7 @@ class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -253,17 +238,31 @@ class Qwen2GoTForCausalLM(Qwen2ForCausalLM):
             cache_position=cache_position,
             got_nodes=got_nodes,
             adj_matrix=adj_matrix,
-            **kwargs,
         )
 
         hidden_states = outputs[0]
+        if labels is None and not is_torchdynamo_compiling():
+            logger.warning_once(
+                "Starting from v4.46, the `logits` model output will have the same type as the model (except at train time, where it will always be FP32)"
+            )
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
+        # TODO: remove the float() operation in v4.46
+        logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :]).float()
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+            # Upcast to float if we need to compute the loss to avoid potential precision issues
+            logits = logits.float()
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = CrossEntropyLoss()
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
 
         if not return_dict:
             output = (logits,) + outputs[1:]

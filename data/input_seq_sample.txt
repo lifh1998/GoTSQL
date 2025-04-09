@@ -1,0 +1,156 @@
+Task Overview:
+You are a data science expert. Below, you are provided with a database schema and a natural language question. Your task is to understand the schema and generate a valid SQL query to answer the question.
+
+Database Engine:
+SQLite
+
+Database Schema:
+CREATE TABLE snippet_ownership (
+    ownership_id INTEGER, -- example: [0, 1]
+    snippet_id INTEGER, -- example: [0, 1]
+    user_id INTEGER, -- example: [1]
+    PRIMARY KEY (ownership_id),
+    CONSTRAINT fk_snippet_ownership_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_ownership_user_id FOREIGN KEY (user_id) REFERENCES users (user_id)
+);
+
+CREATE TABLE snippet_comments (
+    comment_id INTEGER, -- example: [0, 1]
+    snippet_id INTEGER, -- example: [0, 1]
+    user_id INTEGER, -- example: [0]
+    PRIMARY KEY (comment_id),
+    CONSTRAINT fk_snippet_comments_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_comments_user_id FOREIGN KEY (user_id) REFERENCES users (user_id)
+);
+
+CREATE TABLE code_snippets (
+    snippet_id INTEGER, -- Unique identifier for each code snippet, example: [0, 1]
+    description TEXT, -- Description of the code snippet, example: ['Multifactorial of n of order k, n(!!...!', 'Issues an HTTP redirect to the given rel']
+    complexity INTEGER, -- Complexity score of the code snippet, example: [5, 10]
+    language_id INTEGER, -- Reference to the programming language of the code snippet, example: [0, 1]
+    uploaded_by INTEGER, -- ID of the user who uploaded the code snippet, example: [1, 0]
+    upload_date TEXT, -- Date the code snippet was uploaded, example: ['2023-01-01', '2023-01-02']
+    is_public INTEGER, -- Indicates whether the snippet is public or private, example: [1]
+    license TEXT, -- The license under which the snippet is shared, example: ['MIT', 'Apache-2.0']
+    file_path TEXT, -- Path to the file where the snippet is stored, example: ['path/to/snippet1.py', 'path/to/snippet2.py']
+    PRIMARY KEY (snippet_id),
+    CONSTRAINT fk_code_snippets_language_id FOREIGN KEY (language_id) REFERENCES programming_languages (language_id),
+    CONSTRAINT fk_code_snippets_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users (user_id)
+);
+
+CREATE TABLE users (
+    user_id INTEGER, -- example: [0, 1]
+    is_active INTEGER, -- example: [1]
+    last_login TEXT, -- Date of the user's last login, example: ['2023-05-01', '2023-05-02']
+    PRIMARY KEY (user_id)
+);
+
+CREATE TABLE user_permissions (
+    mapping_id INTEGER, -- Unique identifier for each permission mapping, example: [0, 1]
+    user_id INTEGER, -- ID of the user, example: [1, 0]
+    permission_id INTEGER, -- ID of the permission, example: [1, 0]
+    PRIMARY KEY (mapping_id),
+    CONSTRAINT fk_user_permissions_user_id FOREIGN KEY (user_id) REFERENCES users (user_id),
+    CONSTRAINT fk_user_permissions_permission_id FOREIGN KEY (permission_id) REFERENCES permissions (permission_id)
+);
+
+CREATE TABLE snippet_tag_mapping (
+    mapping_id INTEGER, -- example: [0, 1]
+    snippet_id INTEGER, -- example: [1]
+    tag_id INTEGER, -- example: [0]
+    created_date TEXT, -- example: ['2023-01-01']
+    PRIMARY KEY (mapping_id),
+    CONSTRAINT fk_snippet_tag_mapping_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_tag_mapping_tag_id FOREIGN KEY (tag_id) REFERENCES snippet_tags (tag_id)
+);
+
+CREATE TABLE snippet_tags (
+    tag_id INTEGER, -- example: [0, 1]
+    description TEXT, -- example: ['Tags for mathematical functions.', 'Tags for web development functions.']
+    PRIMARY KEY (tag_id)
+);
+
+CREATE TABLE snippet_versions (
+    version_id INTEGER, -- example: [0, 1]
+    snippet_id INTEGER, -- example: [1, 0]
+    created_by INTEGER, -- example: [1, 0]
+    PRIMARY KEY (version_id),
+    CONSTRAINT fk_snippet_versions_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_versions_created_by FOREIGN KEY (created_by) REFERENCES users (user_id)
+);
+
+CREATE TABLE snippet_usage (
+    usage_id INTEGER, -- Unique identifier for each usage event, example: [0, 1]
+    snippet_id INTEGER, -- ID of the code snippet being used, example: [0]
+    user_id INTEGER, -- ID of the user using the code snippet, example: [1]
+    is_successful INTEGER, -- Indicates whether the usage was successful, example: [1]
+    PRIMARY KEY (usage_id),
+    CONSTRAINT fk_snippet_usage_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_usage_user_id FOREIGN KEY (user_id) REFERENCES users (user_id)
+);
+
+CREATE TABLE permissions (
+    permission_id INTEGER, -- Unique identifier for each permission, example: [0, 1]
+    description TEXT, -- example: ['Permission to view code snippets', 'Permission to upload code snippets']
+    PRIMARY KEY (permission_id)
+);
+
+CREATE TABLE snippet_category_mapping (
+    mapping_id INTEGER, -- Unique identifier for each category mapping, example: [0, 1]
+    snippet_id INTEGER, -- example: [0, 1]
+    category_id INTEGER, -- ID of the category, example: [0]
+    PRIMARY KEY (mapping_id),
+    CONSTRAINT fk_snippet_category_mapping_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_category_mapping_category_id FOREIGN KEY (category_id) REFERENCES snippet_categories (category_id)
+);
+
+CREATE TABLE snippet_ratings (
+    rating_id INTEGER, -- Unique identifier for each rating, example: [0, 1]
+    snippet_id INTEGER, -- ID of the code snippet being rated, example: [0, 1]
+    user_id INTEGER, -- ID of the user rating the code snippet, example: [1, 0]
+    created_date TEXT, -- Date the rating was given, example: ['2023-05-01', '2023-05-02']
+    PRIMARY KEY (rating_id),
+    CONSTRAINT fk_snippet_ratings_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_snippet_ratings_user_id FOREIGN KEY (user_id) REFERENCES users (user_id)
+);
+
+CREATE TABLE quality_scores (
+    score_id INTEGER, -- Unique identifier for each quality score entry, example: [0, 1]
+    snippet_id INTEGER, -- ID of the code snippet being evaluated, example: [0, 1]
+    rouge_1_r REAL, -- ROUGE-1 recall score, example: [0.4, 0.309091]
+    created_by INTEGER, -- ID of the user who created the score, example: [0, 1]
+    PRIMARY KEY (score_id),
+    CONSTRAINT fk_quality_scores_snippet_id FOREIGN KEY (snippet_id) REFERENCES code_snippets (snippet_id),
+    CONSTRAINT fk_quality_scores_created_by FOREIGN KEY (created_by) REFERENCES users (user_id)
+);
+
+CREATE TABLE programming_languages (
+    language_id INTEGER, -- Unique identifier for each programming language, example: [0, 1]
+    language_name TEXT, -- Name of the programming language, example: ['Python', 'JavaScript']
+    description TEXT, -- Description of the programming language, example: ['A high-level programming language.', 'A programming language for web developme']
+    PRIMARY KEY (language_id)
+);
+
+CREATE TABLE snippet_categories (
+    category_id INTEGER, -- example: [0, 1]
+    description TEXT, -- example: ['Functions for mathematical operations.', 'Functions for web development tasks.']
+    PRIMARY KEY (category_id)
+);
+This schema describes the database's structure, including tables, columns, primary keys, foreign keys, and any relevant relationships or constraints.
+
+Question:
+\"Complicated code snippets\" refers to code snippets with a complexity score greater than 5; 'is_public' equals 1 indicates that the code snippet is publicly available.
+What are the descriptions and complexity scores of those complicated public code snippets?
+
+Instructions:
+- Make sure you only output the information that is asked in the question. If the question asks for a specific column, make sure to only include that column in the SELECT clause, nothing more.
+- The generated query should return all of the information asked in the question without any missing or extra information.
+- Before generating the final SQL query, please think through the steps of how to write the query.
+
+Output Format:
+In your answer, please enclose the generated SQL query in a code block:
+```sql
+-- Your SQL query
+```
+
+Take a deep breath and think step by step to find the correct SQL query.
